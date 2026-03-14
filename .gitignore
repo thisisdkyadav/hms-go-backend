@@ -1,0 +1,13 @@
+.env
+.cache/
+bin/
+
+# Go build and test output
+*.test
+*.out
+coverage.out
+
+# IDE / OS noise
+.DS_Store
+.idea/
+.vscode/

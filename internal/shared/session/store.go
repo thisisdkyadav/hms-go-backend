@@ -167,7 +167,7 @@ func (m *Manager) ListUserSessions(ctx context.Context, userID string) ([]Device
 	}
 
 	pipe := m.client.Pipeline()
-	results := make([]*redisdriver.StringStringMapCmd, 0, len(sessionIDs))
+	results := make([]*redisdriver.MapStringStringCmd, 0, len(sessionIDs))
 	for _, sessionID := range sessionIDs {
 		results = append(results, pipe.HGetAll(ctx, m.metaKey(sessionID)))
 	}
