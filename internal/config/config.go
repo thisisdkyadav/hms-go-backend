@@ -94,7 +94,7 @@ func Load() (Config, error) {
 		Session: SessionConfig{
 			CookieName: envString("SESSION_COOKIE_NAME", "connect.sid"),
 			CookieDomain: envString("SESSION_COOKIE_DOMAIN", ""),
-			Prefix:     envString("REDIS_SESSION_PREFIX", "go:sess:"),
+			Prefix:     envString("REDIS_SESSION_PREFIX", "sess:"),
 			TTL:        time.Duration(envInt("SESSION_TTL_SECONDS", 7*24*60*60)) * time.Second,
 			Secret:     sessionSecret,
 			Secure:     envBool("SESSION_SECURE", false),

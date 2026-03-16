@@ -2,12 +2,17 @@ package session
 
 import (
 	"context"
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"hms/go-backend/internal/config"
@@ -37,12 +42,20 @@ type UserSnapshot struct {
 }
 
 type Record struct {
-	UserID    string       `json:"userId"`
-	UserData  UserSnapshot `json:"userData"`
-	Role      string       `json:"role"`
-	Email     string       `json:"email"`
-	CreatedAt time.Time    `json:"createdAt"`
-	UpdatedAt time.Time    `json:"updatedAt"`
+	Cookie   SessionCookie `json:"cookie"`
+	UserID   string        `json:"userId"`
+	UserData UserSnapshot  `json:"userData"`
+	Role     string        `json:"role"`
+	Email    string        `json:"email"`
+}
+
+type SessionCookie struct {
+	OriginalMaxAge int64  `json:"originalMaxAge"`
+	Expires        string `json:"expires"`
+	Secure         bool   `json:"secure"`
+	HTTPOnly       bool   `json:"httpOnly"`
+	Path           string `json:"path"`
+	SameSite       string `json:"sameSite,omitempty"`
 }
 
 type DeviceMetadata struct {
@@ -72,8 +85,7 @@ func (m *Manager) Create(ctx context.Context, record Record, meta DeviceMetadata
 	}
 
 	now := time.Now().UTC()
-	record.CreatedAt = now
-	record.UpdatedAt = now
+	record.Cookie = m.newSessionCookie(now)
 	meta.SessionID = sessionID
 	meta.UserID = record.UserID
 	meta.LoginTime = now
@@ -91,7 +103,7 @@ func (m *Manager) Create(ctx context.Context, record Record, meta DeviceMetadata
 }
 
 func (m *Manager) Save(ctx context.Context, sessionID string, record Record) error {
-	record.UpdatedAt = time.Now().UTC()
+	record.Cookie = m.newSessionCookie(time.Now().UTC())
 
 	payload, err := json.Marshal(record)
 	if err != nil {
@@ -132,8 +144,25 @@ func (m *Manager) Exists(ctx context.Context, sessionID string) (bool, error) {
 }
 
 func (m *Manager) Touch(ctx context.Context, sessionID, userID string, at time.Time) error {
+	record, err := m.Get(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+
+	if record != nil {
+		record.Cookie = m.newSessionCookie(at)
+
+		payload, marshalErr := json.Marshal(record)
+		if marshalErr != nil {
+			return fmt.Errorf("marshal touched session: %w", marshalErr)
+		}
+
+		if err := m.client.Set(ctx, m.sessionKey(sessionID), payload, m.cfg.TTL).Err(); err != nil {
+			return err
+		}
+	}
+
 	pipe := m.client.TxPipeline()
-	pipe.Expire(ctx, m.sessionKey(sessionID), m.cfg.TTL)
 	pipe.HSet(ctx, m.metaKey(sessionID), "lastActive", at.UTC().Format(time.RFC3339))
 	pipe.Expire(ctx, m.metaKey(sessionID), m.cfg.TTL)
 	pipe.ZAdd(ctx, m.userSessionsKey(userID), redisdriver.Z{
@@ -141,7 +170,7 @@ func (m *Manager) Touch(ctx context.Context, sessionID, userID string, at time.T
 		Member: sessionID,
 	})
 	pipe.Expire(ctx, m.userSessionsKey(userID), m.cfg.TTL)
-	_, err := pipe.Exec(ctx)
+	_, err = pipe.Exec(ctx)
 	return err
 }
 
@@ -199,7 +228,7 @@ func (m *Manager) ListUserSessions(ctx context.Context, userID string) ([]Device
 func (m *Manager) WriteCookie(w http.ResponseWriter, sessionID string) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     m.cfg.CookieName,
-		Value:    sessionID,
+		Value:    signSessionID(sessionID, m.cfg.Secret),
 		Path:     "/",
 		Domain:   m.cfg.CookieDomain,
 		MaxAge:   int(m.cfg.TTL.Seconds()),
@@ -227,7 +256,13 @@ func (m *Manager) ReadSessionID(r *http.Request) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return cookie.Value, nil
+
+	sessionID, err := unsignSessionID(cookie.Value, m.cfg.Secret)
+	if err != nil {
+		return "", err
+	}
+
+	return sessionID, nil
 }
 
 func (m *Manager) saveMeta(ctx context.Context, meta DeviceMetadata) error {
@@ -286,4 +321,65 @@ func fallbackString(value, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+func (m *Manager) newSessionCookie(now time.Time) SessionCookie {
+	return SessionCookie{
+		OriginalMaxAge: m.cfg.TTL.Milliseconds(),
+		Expires:        now.Add(m.cfg.TTL).UTC().Format(time.RFC3339),
+		Secure:         m.cfg.Secure,
+		HTTPOnly:       true,
+		Path:           "/",
+		SameSite:       sameSiteString(m.cfg.SameSite),
+	}
+}
+
+func sameSiteString(value http.SameSite) string {
+	switch value {
+	case http.SameSiteNoneMode:
+		return "none"
+	case http.SameSiteLaxMode:
+		return "lax"
+	case http.SameSiteStrictMode:
+		return "strict"
+	default:
+		return ""
+	}
+}
+
+func signSessionID(sessionID, secret string) string {
+	signature := cookieSignature(sessionID, secret)
+	return "s:" + sessionID + "." + signature
+}
+
+func unsignSessionID(cookieValue, secret string) (string, error) {
+	if cookieValue == "" {
+		return "", fmt.Errorf("missing session cookie")
+	}
+
+	if !strings.HasPrefix(cookieValue, "s:") {
+		return cookieValue, nil
+	}
+
+	signedValue := strings.TrimPrefix(cookieValue, "s:")
+	index := strings.LastIndex(signedValue, ".")
+	if index <= 0 {
+		return "", fmt.Errorf("invalid signed session cookie")
+	}
+
+	sessionID := signedValue[:index]
+	signature := signedValue[index+1:]
+	expected := cookieSignature(sessionID, secret)
+
+	if subtle.ConstantTimeCompare([]byte(signature), []byte(expected)) != 1 {
+		return "", fmt.Errorf("invalid session signature")
+	}
+
+	return sessionID, nil
+}
+
+func cookieSignature(value, secret string) string {
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write([]byte(value))
+	return strings.TrimRight(base64.StdEncoding.EncodeToString(mac.Sum(nil)), "=")
 }

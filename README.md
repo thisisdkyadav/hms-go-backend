@@ -21,7 +21,6 @@ What is intentionally not done yet:
 
 - frontend changes
 - routing production traffic from Node to Go
-- cross-service session interoperability with the existing Node backend
 - non-auth domain migration
 
 ## Folder Map
@@ -47,4 +46,4 @@ go-backend/
 
 ## Migration Note
 
-This service is phase 1 of the move from Node to Go. It mirrors the current auth contract cleanly, but the rest of the HMS backend still assumes Node-owned sessions. That interoperability work should be handled as a dedicated next step instead of being hidden inside this scaffold.
+This service is phase 1 of the move from Node to Go. Auth now writes Express-compatible Redis sessions so the existing Node backend can continue authenticating requests after login happens in Go. The remaining migration work is still domain-by-domain.

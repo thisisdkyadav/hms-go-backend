@@ -507,8 +507,7 @@ func (s *Service) buildUserBundle(ctx context.Context, user *User) (UserResponse
 		Role:    response.Role,
 		SubRole: response.SubRole,
 		Authz: map[string]any{
-			"override":  authzResponse.Override,
-			"effective": authzResponse.Effective,
+			"override": authzResponse.Override,
 		},
 		Hostel:     sessionHostel(hostel),
 		PinnedTabs: copyStringSlice(response.PinnedTabs),
