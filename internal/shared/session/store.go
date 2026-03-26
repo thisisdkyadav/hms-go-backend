@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -226,12 +227,14 @@ func (m *Manager) ListUserSessions(ctx context.Context, userID string) ([]Device
 }
 
 func (m *Manager) WriteCookie(w http.ResponseWriter, sessionID string) {
+	expiresAt := time.Now().Add(m.cfg.TTL)
 	http.SetCookie(w, &http.Cookie{
 		Name:     m.cfg.CookieName,
-		Value:    signSessionID(sessionID, m.cfg.Secret),
+		Value:    url.QueryEscape(signSessionID(sessionID, m.cfg.Secret)),
 		Path:     "/",
 		Domain:   m.cfg.CookieDomain,
 		MaxAge:   int(m.cfg.TTL.Seconds()),
+		Expires:  expiresAt,
 		HttpOnly: true,
 		Secure:   m.cfg.Secure,
 		SameSite: m.cfg.SameSite,
@@ -245,6 +248,7 @@ func (m *Manager) ClearCookie(w http.ResponseWriter) {
 		Path:     "/",
 		Domain:   m.cfg.CookieDomain,
 		MaxAge:   -1,
+		Expires:  time.Unix(0, 0),
 		HttpOnly: true,
 		Secure:   m.cfg.Secure,
 		SameSite: m.cfg.SameSite,
@@ -257,7 +261,12 @@ func (m *Manager) ReadSessionID(r *http.Request) (string, error) {
 		return "", err
 	}
 
-	sessionID, err := unsignSessionID(cookie.Value, m.cfg.Secret)
+	decodedValue, err := normalizeCookieValue(cookie.Value)
+	if err != nil {
+		return "", err
+	}
+
+	sessionID, err := unsignSessionID(decodedValue, m.cfg.Secret)
 	if err != nil {
 		return "", err
 	}
@@ -382,4 +391,18 @@ func cookieSignature(value, secret string) string {
 	mac := hmac.New(sha256.New, []byte(secret))
 	mac.Write([]byte(value))
 	return strings.TrimRight(base64.StdEncoding.EncodeToString(mac.Sum(nil)), "=")
+}
+
+func normalizeCookieValue(value string) (string, error) {
+	trimmed := strings.Trim(value, "\"")
+	if trimmed == "" {
+		return "", fmt.Errorf("missing session cookie")
+	}
+
+	decoded, err := url.QueryUnescape(trimmed)
+	if err != nil {
+		return "", fmt.Errorf("decode session cookie: %w", err)
+	}
+
+	return decoded, nil
 }

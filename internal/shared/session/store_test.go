@@ -2,6 +2,7 @@ package session
 
 import (
 	"encoding/json"
+	"net/http/httptest"
 	"net/http"
 	"testing"
 	"time"
@@ -92,5 +93,42 @@ func TestSessionRecordJSONShapeIncludesExpressCookie(t *testing.T) {
 
 	if _, hasEffective := authzValue["effective"]; hasEffective {
 		t.Fatalf("expected shared session payload to omit authz.effective")
+	}
+}
+
+func TestWriteCookieAndReadSessionIDRoundTrip(t *testing.T) {
+	manager := &Manager{
+		cfg: config.SessionConfig{
+			CookieName: "connect.sid",
+			Secret:     "test-session-secret",
+			TTL:        24 * time.Hour,
+			Secure:     false,
+			SameSite:   http.SameSiteLaxMode,
+		},
+	}
+
+	recorder := httptest.NewRecorder()
+	manager.WriteCookie(recorder, "abc123session")
+
+	response := recorder.Result()
+	cookies := response.Cookies()
+	if len(cookies) != 1 {
+		t.Fatalf("expected one cookie to be written, got %d", len(cookies))
+	}
+
+	request := httptest.NewRequest(http.MethodGet, "/", nil)
+	request.AddCookie(cookies[0])
+
+	sessionID, err := manager.ReadSessionID(request)
+	if err != nil {
+		t.Fatalf("expected cookie roundtrip to succeed, got error: %v", err)
+	}
+
+	if sessionID != "abc123session" {
+		t.Fatalf("expected session ID %q, got %q", "abc123session", sessionID)
+	}
+
+	if cookies[0].Expires.IsZero() {
+		t.Fatalf("expected written cookie to include expires")
 	}
 }
