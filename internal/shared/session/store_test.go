@@ -2,8 +2,8 @@ package session
 
 import (
 	"encoding/json"
-	"net/http/httptest"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -131,4 +131,54 @@ func TestWriteCookieAndReadSessionIDRoundTrip(t *testing.T) {
 	if cookies[0].Expires.IsZero() {
 		t.Fatalf("expected written cookie to include expires")
 	}
+}
+
+func TestReadSessionIDAcceptsAlreadyDecodedCookieValue(t *testing.T) {
+	manager := &Manager{
+		cfg: config.SessionConfig{
+			CookieName: "connect.sid",
+			Secret:     "test-session-secret",
+			TTL:        24 * time.Hour,
+			Secure:     true,
+			SameSite:   http.SameSiteLaxMode,
+		},
+	}
+
+	var rawSigned string
+	for i := 0; i < 2000; i++ {
+		candidate := signSessionID("abc123session", manager.cfg.Secret)
+		if containsPlus(candidate) {
+			rawSigned = candidate
+			break
+		}
+	}
+
+	if rawSigned == "" {
+		t.Fatalf("expected to generate a signed cookie value containing '+'")
+	}
+
+	request := httptest.NewRequest(http.MethodGet, "/", nil)
+	request.AddCookie(&http.Cookie{
+		Name:  "connect.sid",
+		Value: rawSigned,
+	})
+
+	sessionID, err := manager.ReadSessionID(request)
+	if err != nil {
+		t.Fatalf("expected already-decoded cookie value to succeed, got error: %v", err)
+	}
+
+	if sessionID != "abc123session" {
+		t.Fatalf("expected session ID %q, got %q", "abc123session", sessionID)
+	}
+}
+
+func containsPlus(value string) bool {
+	for _, char := range value {
+		if char == '+' {
+			return true
+		}
+	}
+
+	return false
 }

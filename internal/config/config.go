@@ -123,11 +123,7 @@ func Load() (Config, error) {
 	}
 
 	if cfg.Session.SameSite == 0 {
-		if cfg.App.Env == "production" {
-			cfg.Session.SameSite = http.SameSiteNoneMode
-		} else {
-			cfg.Session.SameSite = http.SameSiteStrictMode
-		}
+		cfg.Session.SameSite = defaultSameSite(cfg.Session.Secure)
 	}
 
 	return cfg, nil
@@ -212,4 +208,12 @@ func resolveSameSite(value string) http.SameSite {
 	default:
 		return 0
 	}
+}
+
+func defaultSameSite(secure bool) http.SameSite {
+	if secure {
+		return http.SameSiteNoneMode
+	}
+
+	return http.SameSiteLaxMode
 }

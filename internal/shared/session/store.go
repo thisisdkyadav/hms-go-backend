@@ -230,7 +230,7 @@ func (m *Manager) WriteCookie(w http.ResponseWriter, sessionID string) {
 	expiresAt := time.Now().Add(m.cfg.TTL)
 	http.SetCookie(w, &http.Cookie{
 		Name:     m.cfg.CookieName,
-		Value:    url.QueryEscape(signSessionID(sessionID, m.cfg.Secret)),
+		Value:    url.PathEscape(signSessionID(sessionID, m.cfg.Secret)),
 		Path:     "/",
 		Domain:   m.cfg.CookieDomain,
 		MaxAge:   int(m.cfg.TTL.Seconds()),
@@ -261,17 +261,14 @@ func (m *Manager) ReadSessionID(r *http.Request) (string, error) {
 		return "", err
 	}
 
-	decodedValue, err := normalizeCookieValue(cookie.Value)
-	if err != nil {
-		return "", err
+	for _, candidate := range normalizeCookieValues(cookie.Value) {
+		sessionID, unsignErr := unsignSessionID(candidate, m.cfg.Secret)
+		if unsignErr == nil {
+			return sessionID, nil
+		}
 	}
 
-	sessionID, err := unsignSessionID(decodedValue, m.cfg.Secret)
-	if err != nil {
-		return "", err
-	}
-
-	return sessionID, nil
+	return "", fmt.Errorf("invalid session cookie")
 }
 
 func (m *Manager) saveMeta(ctx context.Context, meta DeviceMetadata) error {
@@ -393,16 +390,29 @@ func cookieSignature(value, secret string) string {
 	return strings.TrimRight(base64.StdEncoding.EncodeToString(mac.Sum(nil)), "=")
 }
 
-func normalizeCookieValue(value string) (string, error) {
+func normalizeCookieValues(value string) []string {
 	trimmed := strings.Trim(value, "\"")
 	if trimmed == "" {
-		return "", fmt.Errorf("missing session cookie")
+		return nil
 	}
 
-	decoded, err := url.QueryUnescape(trimmed)
-	if err != nil {
-		return "", fmt.Errorf("decode session cookie: %w", err)
+	candidates := []string{trimmed}
+	seen := map[string]struct{}{
+		trimmed: {},
 	}
 
-	return decoded, nil
+	if decoded, err := url.PathUnescape(trimmed); err == nil {
+		if _, exists := seen[decoded]; !exists {
+			candidates = append(candidates, decoded)
+			seen[decoded] = struct{}{}
+		}
+	}
+
+	if decoded, err := url.QueryUnescape(trimmed); err == nil {
+		if _, exists := seen[decoded]; !exists {
+			candidates = append(candidates, decoded)
+		}
+	}
+
+	return candidates
 }

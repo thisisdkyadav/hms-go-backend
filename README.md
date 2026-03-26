@@ -44,6 +44,11 @@ go-backend/
 2. Point the service at the existing MongoDB and Redis.
 3. Run `go run ./cmd/api`.
 
+## Cookie Defaults
+
+- use `SESSION_SECURE=true` and `SESSION_SAME_SITE=none` when the app is served over HTTPS
+- use `SESSION_SECURE=false` and `SESSION_SAME_SITE=lax` for plain HTTP environments
+
 ## Migration Note
 
 This service is phase 1 of the move from Node to Go. Auth now writes Express-compatible Redis sessions so the existing Node backend can continue authenticating requests after login happens in Go. The remaining migration work is still domain-by-domain.
